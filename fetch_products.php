@@ -1,5 +1,6 @@
 <?php
 include 'config.php';
+session_start();
 
 class ProductFilter {
     private $conn;
@@ -19,11 +20,9 @@ class ProductFilter {
                 return;
             }
             
-            echo '<div class="box-container">';
             foreach ($products as $product) {
                 $this->renderProductBox($product);
             }
-            echo '</div>';
             
         } catch (Exception $e) {
             echo '<p class="empty">Error loading products: ' . $e->getMessage() . '</p>';
@@ -64,18 +63,19 @@ class ProductFilter {
     
     private function renderProductBox($product) {
         $available_stock = $product['stocks'];
+        $is_favorite = $this->isProductFavorite($product['id']);
         ?>
         <form action="" method="post" class="box">
-            <img class="image" src="uploaded_img/<?php echo htmlspecialchars($product['image']); ?>" alt="">
+            <img class="image" src="uploaded_img/<?php echo htmlspecialchars($product['image']); ?>" alt="<?php echo htmlspecialchars($product['name']); ?>">
             <div class="heart-container">
                 <button type="submit" name="add_to_favorites" class="heart-btn">
-                    <i class="fa-regular fa-heart"></i>
+                    <i class="<?php echo $is_favorite ? 'fa-solid fa-heart' : 'fa-regular fa-heart'; ?>"></i>
                 </button>
             </div>
             <div class="name"><?php echo htmlspecialchars($product['name']); ?></div>
             <div class="price">Rs.<?php echo htmlspecialchars($product['price']); ?>/-</div>
             <div class="stock">Stock: <?php echo htmlspecialchars($available_stock); ?></div>
-            <input type="number" min="1" name="product_quantity" value="1" class="qty">
+            <input type="number" min="1" max="<?php echo $available_stock; ?>" name="product_quantity" value="1" class="qty">
             <input type="hidden" name="product_id" value="<?php echo htmlspecialchars($product['id']); ?>">
             <input type="hidden" name="product_name" value="<?php echo htmlspecialchars($product['name']); ?>">
             <input type="hidden" name="product_price" value="<?php echo htmlspecialchars($product['price']); ?>">
@@ -85,6 +85,19 @@ class ProductFilter {
             <input type="submit" value="Add to Cart" name="add_to_cart" class="btn">
         </form>
         <?php
+    }
+    
+    private function isProductFavorite($product_id) {
+        if (!isset($_SESSION['id'])) return false;
+        
+        $user_id = $_SESSION['id'];
+        $stmt = $this->conn->prepare("SELECT * FROM `favorites` WHERE user_id = ? AND product_id = ?");
+        $stmt->bind_param("ii", $user_id, $product_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $is_favorite = $result->num_rows > 0;
+        $stmt->close();
+        return $is_favorite;
     }
     
     private function sanitizeInput($input) {

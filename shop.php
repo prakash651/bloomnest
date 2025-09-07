@@ -352,7 +352,7 @@ extract($result);
         
         .products .box-container .box .price {
             font-size: 2.4rem;
-            color: var(--primary);
+            color: white;
             margin: 0.5rem 0;
             font-weight: 700;
         }

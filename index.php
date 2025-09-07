@@ -138,15 +138,19 @@ class HomePage {
         return $categories;
     }
     
-    public function getProducts($category_id = '') {
+    public function getProducts($category = '') {
         $query = "SELECT * FROM `products` WHERE 1";
         $params = [];
         $types = "";
         
-        if (!empty($category_id)) {
-            $query .= " AND category_id = ?";
-            $params[] = $category_id;
-            $types .= "i";
+        if (!empty($category)) {
+            // Convert category to integer to ensure type safety
+            $category = intval($category);
+            if ($category > 0) {
+                $query .= " AND category = ?";
+                $params[] = $category;
+                $types .= "i";
+            }
         }
         
         $query .= " ORDER BY id DESC LIMIT 6";
@@ -190,7 +194,12 @@ class HomePage {
         $cartMessage = $this->handleAddToCart();
         $favoriteMessage = $this->handleAddToFavorites();
         
+        // Get and validate category parameter
         $selected_category = $_GET['category'] ?? '';
+        if (!empty($selected_category) && !ctype_digit($selected_category)) {
+            $selected_category = ''; // Reset if not a valid integer
+        }
+        
         $products = $this->getProducts($selected_category);
         $categories = $this->getCategories();
         $user_id = $_SESSION['id'] ?? null;
@@ -398,6 +407,10 @@ class HomePage {
                     display: grid;
                     grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr));
                     gap: 3rem;
+                    justify-content: center;
+                    margin: 0 auto;
+                    max-width: 1200px;
+                    padding: 0 2rem;
                 }
                 
                 .products .box-container .box {
@@ -435,7 +448,7 @@ class HomePage {
                 
                 .products .box-container .box .price {
                     font-size: 2.4rem;
-                    color: var(--primary);
+                    color: white;
                     margin: 0.5rem 0;
                     font-weight: 700;
                 }
@@ -721,30 +734,145 @@ class HomePage {
             <script>
                 document.addEventListener("DOMContentLoaded", function () {
                     const categoryFilter = document.getElementById('category-filter');
+                    const productsGrid = document.getElementById('products-grid');
                     
                     categoryFilter.addEventListener('change', function() {
                         const category = this.value;
-                        window.location.href = 'index.php?category=' + encodeURIComponent(category);
-                    });
-                    
-                    // Add animation to product boxes on scroll
-                    const productBoxes = document.querySelectorAll('.products .box');
-                    
-                    const observer = new IntersectionObserver((entries) => {
-                        entries.forEach(entry => {
-                            if (entry.isIntersecting) {
-                                entry.target.style.opacity = 1;
-                                entry.target.style.transform = 'translateY(0)';
+                        
+                        // Show loading indicator
+                        productsGrid.innerHTML = '<div class="empty">Loading products...</div>';
+                        
+                        // Create form data for POST request
+                        const formData = new FormData();
+                        formData.append('category', category);
+
+                        // Create AJAX request to fetch_products.php
+                        fetch('fetch_products.php', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Network response was not ok');
                             }
+                            return response.text();
+                        })
+                        .then(data => {
+                            productsGrid.innerHTML = data;
+                            initProductAnimations();
+                        })
+                        .catch(error => {
+                            productsGrid.innerHTML = '<div class="empty">Error loading products: ' + error.message + '</div>';
+                            console.error('Error:', error);
                         });
-                    }, { threshold: 0.1 });
-                    
-                    productBoxes.forEach(box => {
-                        box.style.opacity = 0;
-                        box.style.transform = 'translateY(50px)';
-                        box.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
-                        observer.observe(box);
                     });
+                    
+                    // Initialize product animations
+                    function initProductAnimations() {
+                        const productBoxes = document.querySelectorAll('.products .box');
+                        
+                        const observer = new IntersectionObserver((entries) => {
+                            entries.forEach(entry => {
+                                if (entry.isIntersecting) {
+                                    entry.target.style.opacity = 1;
+                                    entry.target.style.transform = 'translateY(0)';
+                                }
+                            });
+                        }, { threshold: 0.1 });
+                        
+                        productBoxes.forEach(box => {
+                            box.style.opacity = 0;
+                            box.style.transform = 'translateY(50px)';
+                            box.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+                            observer.observe(box);
+                        });
+                    }
+                    
+                    // Handle form submissions with AJAX
+                    document.addEventListener('click', function(e) {
+                        // Handle add to cart form submissions
+                        if (e.target.matches('input[name="add_to_cart"]')) {
+                            e.preventDefault();
+                            
+                            const form = e.target.closest('form');
+                            const formData = new FormData(form);
+                            
+                            fetch('index.php', {
+                                method: 'POST',
+                                body: formData
+                            })
+                            .then(response => response.text())
+                            .then(data => {
+                                // Show success message
+                                showMessage('Product added to cart!');
+                            })
+                            .catch(error => {
+                                showMessage('Error adding product to cart');
+                                console.error('Error:', error);
+                            });
+                        }
+                        
+                        // Handle add to favorites form submissions
+                        if (e.target.matches('.heart-btn') || e.target.closest('.heart-btn')) {
+                            e.preventDefault();
+                            
+                            const btn = e.target.closest('.heart-btn');
+                            const form = btn.closest('form');
+                            const formData = new FormData(form);
+                            formData.append('add_to_favorites', '1');
+                            
+                            fetch('index.php', {
+                                method: 'POST',
+                                body: formData
+                            })
+                            .then(response => response.text())
+                            .then(data => {
+                                // Toggle heart icon
+                                const icon = btn.querySelector('i');
+                                if (icon.classList.contains('fa-regular')) {
+                                    icon.classList.remove('fa-regular');
+                                    icon.classList.add('fa-solid');
+                                    showMessage('Product added to favorites!');
+                                } else {
+                                    icon.classList.remove('fa-solid');
+                                    icon.classList.add('fa-regular');
+                                    showMessage('Product removed from favorites!');
+                                }
+                            })
+                            .catch(error => {
+                                showMessage('Error updating favorites');
+                                console.error('Error:', error);
+                            });
+                        }
+                    });
+                    
+                    // Function to show messages
+                    function showMessage(text) {
+                        // Remove existing messages
+                        const existingMessages = document.querySelectorAll('.message');
+                        existingMessages.forEach(msg => msg.remove());
+                        
+                        // Create new message
+                        const message = document.createElement('div');
+                        message.className = 'message';
+                        message.innerHTML = `
+                            <span>${text}</span>
+                            <i class="fas fa-times" onclick="this.parentElement.remove();"></i>
+                        `;
+                        
+                        // Add to page
+                        document.body.appendChild(message);
+                        
+                        // Auto remove after 3 seconds
+                        setTimeout(() => {
+                            if (message.parentElement) {
+                                message.remove();
+                            }
+                        }, 3000);
+                    }
+                    
+                    // Initialize animations on page load
+                    initProductAnimations();
                 });
             </script>
         </body>
@@ -760,5 +888,7 @@ try {
 } catch (Exception $e) {
     error_log("Home page error: " . $e->getMessage());
     echo "<div class='error'>An error occurred. Please try again later.</div>";
+    // For debugging, you can temporarily show the actual error:
+    echo "<div class='error'>Error: " . htmlspecialchars($e->getMessage()) . "</div>";
 }
 ?>
