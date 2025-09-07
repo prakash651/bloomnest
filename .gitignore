@@ -1,0 +1,8 @@
+# Ignore database files
+*.frm
+*.ibd
+*.opt
+
+# Ignore other files or directories (if needed)
+/uploaded_img
+/vendor/
