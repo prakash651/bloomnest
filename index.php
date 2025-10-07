@@ -11,38 +11,98 @@ class HomePage {
     }
     
     public function handlePaymentStatus() {
+        // Handle eSewa payment success
+        if (isset($_GET["payment"]) && $_GET["payment"] == "success") {
+            $this->completeEsewaPayment();
+        }
+        
+        // Also keep the existing data parameter handling for backward compatibility
         if (isset($_GET["data"])) {
             $response_encoded = $_GET["data"];
             $response = json_decode(base64_decode($response_encoded), true);
             $status = $response["status"] ?? '';
             
             if ($status == "COMPLETE") {
-                $this->updateLastOrderStatus();
+                $this->completeEsewaPayment();
             }
         }
     }
     
-    private function updateLastOrderStatus() {
-        $stmt = $this->conn->prepare("SELECT id FROM orders ORDER BY id DESC LIMIT 1");
+    private function completeEsewaPayment() {
+        // Check if there's a pending order in session
+        if (isset($_SESSION['pending_order'])) {
+            $pending_order = $_SESSION['pending_order'];
+            $order_id = $pending_order['order_id'];
+            $selected_items = $pending_order['selected_items'];
+            $user_id = $pending_order['user_id'];
+            
+            // Update order status to Completed
+            if ($this->updateOrderStatus($order_id, 'Completed')) {
+                // Update stock and clear cart items
+                $this->updateStockAndClearCart($selected_items, $user_id);
+                
+                // Clear pending order from session
+                unset($_SESSION['pending_order']);
+                
+                // Show success message
+                $this->showMessage("Payment successful! Your order has been completed.");
+                return true;
+            }
+        }
+        
+        $this->showMessage("Payment processed but order completion failed. Please contact support.");
+        return false;
+    }
+    
+    private function updateOrderStatus($order_id, $status) {
+        $stmt = $this->conn->prepare("UPDATE orders SET payment_status = ? WHERE id = ?");
+        $stmt->bind_param("si", $status, $order_id);
+        $success = $stmt->execute();
+        $stmt->close();
+        return $success;
+    }
+    
+    private function updateStockAndClearCart($selected_items, $user_id) {
+        foreach ($selected_items as $item_id) {
+            // Get cart item details
+            $cart_item = $this->getCartItem($item_id, $user_id);
+            if ($cart_item) {
+                // Update product stock
+                $this->updateProductStock($cart_item['name'], $cart_item['quantity']);
+                // Remove from cart
+                $this->removeFromCart($item_id, $user_id);
+            }
+        }
+    }
+    
+    private function getCartItem($item_id, $user_id) {
+        $stmt = $this->conn->prepare("SELECT * FROM cart WHERE id = ? AND user_id = ?");
+        $stmt->bind_param("ii", $item_id, $user_id);
         $stmt->execute();
         $result = $stmt->get_result();
-        
-        if ($result->num_rows > 0) {
-            $row = $result->fetch_assoc();
-            $lastId = $row['id'];
-            $newValue = 'Completed';
-            
-            $updateStmt = $this->conn->prepare("UPDATE orders SET payment_status = ? WHERE id = ?");
-            $updateStmt->bind_param("si", $newValue, $lastId);
-            
-            if ($updateStmt->execute()) {
-                $message[] = "Record updated successfully";
-            } else {
-                error_log("Error updating record: " . $updateStmt->error);
-            }
-            $updateStmt->close();
-        }
+        $item = $result->fetch_assoc();
         $stmt->close();
+        return $item;
+    }
+    
+    private function updateProductStock($product_name, $quantity) {
+        $stmt = $this->conn->prepare("UPDATE products SET stocks = stocks - ? WHERE name = ?");
+        $stmt->bind_param("is", $quantity, $product_name);
+        $success = $stmt->execute();
+        $stmt->close();
+        return $success;
+    }
+    
+    private function removeFromCart($item_id, $user_id) {
+        $stmt = $this->conn->prepare("DELETE FROM cart WHERE id = ? AND user_id = ?");
+        $stmt->bind_param("ii", $item_id, $user_id);
+        $success = $stmt->execute();
+        $stmt->close();
+        return $success;
+    }
+    
+    private function showMessage($text) {
+        echo "<script>alert('$text');</script>";
     }
     
     public function handleAddToCart() {
@@ -888,7 +948,6 @@ try {
 } catch (Exception $e) {
     error_log("Home page error: " . $e->getMessage());
     echo "<div class='error'>An error occurred. Please try again later.</div>";
-    // For debugging, you can temporarily show the actual error:
     echo "<div class='error'>Error: " . htmlspecialchars($e->getMessage()) . "</div>";
 }
 ?>

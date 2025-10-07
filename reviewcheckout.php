@@ -2,171 +2,117 @@
 include 'config.php';
 session_start();
 
-class CheckoutProcessor {
-    private $conn;
-    private $user_id;
-    private $user_data = [];
-    private $order_data = [];
-    private $errors = [];
+$user_id = $_SESSION['id'];
+
+if (!isset($user_id)) {
+    header('location:login.php');
+}
+
+// Function to update stock from products string (for reorders)
+function updateStockFromProductsString($products_string, $conn) {
+    // Parse products string like "Rose (2), Lily (3), Tulip (1)"
+    $products = explode(', ', $products_string);
     
-    public function __construct($db_connection) {
-        $this->conn = $db_connection;
-        $this->user_id = $_SESSION['id'] ?? null;
-        
-        if (!$this->user_id) {
-            header('location:login.php');
-            exit();
-        }
-    }
-    
-    public function loadUserData() {
-        $user_details_query = mysqli_query($this->conn, "SELECT * FROM `user_details` WHERE id = '{$this->user_id}'") or die('query failed');
-        
-        if (mysqli_num_rows($user_details_query) > 0) {
-            $this->user_data = mysqli_fetch_assoc($user_details_query);
+    foreach ($products as $product) {
+        // Extract product name and quantity using regex
+        if (preg_match('/(.+)\s+\((\d+)\)/', $product, $matches)) {
+            $product_name = trim($matches[1]);
+            $quantity = intval($matches[2]);
             
-            // Split address into city and district
-            $address_parts = explode(', ', $this->user_data['address'] ?? '');
-            $this->user_data['city'] = trim($address_parts[0] ?? '');
-            $this->user_data['district'] = trim($address_parts[1] ?? '');
+            // Update product stock
+            mysqli_query($conn, "UPDATE `products` SET stocks = stocks - $quantity WHERE name = '$product_name'");
         }
-    }
-    
-    public function loadOrderData() {
-        if (isset($_GET['order_id']) && isset($_GET['products']) && isset($_GET['total_price'])) {
-            $this->order_data = [
-                'order_id' => $_GET['order_id'],
-                'products' => $_GET['products'],
-                'total_price' => $_GET['total_price'],
-                'name' => $_GET['name'] ?? $this->user_data['name'] ?? '',
-                'email' => $_GET['email'] ?? $this->user_data['email'] ?? '',
-                'address' => $_GET['address'] ?? $this->user_data['address'] ?? '',
-                'phone' => $_GET['phone'] ?? $this->user_data['number'] ?? ''
-            ];
-            
-            // Split address into city and district
-            $address_parts = explode(', ', $this->order_data['address']);
-            $this->order_data['city'] = trim($address_parts[0] ?? '');
-            $this->order_data['district'] = trim($address_parts[1] ?? '');
-        }
-    }
-    
-    public function processOrder() {
-        if (isset($_POST['order_btn'])) {
-            $name = mysqli_real_escape_string($this->conn, $_POST['name']);
-            $email = mysqli_real_escape_string($this->conn, $_POST['email']);
-            $city = mysqli_real_escape_string($this->conn, $_POST['city']);
-            $district = mysqli_real_escape_string($this->conn, $_POST['district']);
-            $phone = mysqli_real_escape_string($this->conn, $_POST['phone']);
-            $payment_method = mysqli_real_escape_string($this->conn, $_POST['method']);
-            $selected_items = mysqli_real_escape_string($this->conn, $_POST['selected_items']);
-            $total_price = mysqli_real_escape_string($this->conn, $_POST['total_price']);
-            
-            // Validate inputs
-            if (!$this->validateInputs($name, $email, $phone, $city, $district)) {
-                return false;
-            }
-            
-            // Concatenate city and district to form the address
-            $address = $city . ', ' . $district;
-            
-            // Insert the order into the orders table
-            $place_order = mysqli_query($this->conn, "INSERT INTO `orders`(user_id, placed_on, name, number, email, address, method, total_products, total_price, payment_status) VALUES('{$this->user_id}', NOW(), '$name', '$phone', '$email', '$address', '$payment_method', '$selected_items', '$total_price', 'Pending')") or die('query failed');
-            
-            if ($place_order) {
-                if ($payment_method == "esewa") {
-                    header('location:esewa.php?amount=' . $total_price);
-                    exit();
-                } else {
-                    // Redirect or show success message
-                    echo '<script>alert("Your order has been placed successfully!");</script>';
-                    header('location:orders.php'); // Redirect to orders page after placing the order
-                    exit();
-                }
-            } else {
-                $this->errors[] = "Failed to place the order.";
-                return false;
-            }
-        }
-        return true;
-    }
-    
-    private function validateInputs($name, $email, $phone, $city, $district) {
-        $nameRegex = '/^[a-zA-Z\s]+$/';
-        $numberRegex = '/^(97|98)[0-9]{8}$/';
-        $emailRegex = '/^[^\s@]+@[^\s@]+\.[^\s@]+$/';
-        
-        if (!preg_match($nameRegex, $name)) {
-            $this->errors[] = "Please enter a valid name.";
-        }
-        
-        if (!preg_match($emailRegex, $email)) {
-            $this->errors[] = "Please enter a valid email address.";
-        }
-        
-        if (!preg_match($numberRegex, $phone)) {
-            $this->errors[] = "Please enter a valid phone number (10 digits) starting with 97 or 98.";
-        }
-        
-        if (empty($city)) {
-            $this->errors[] = "Please select a city.";
-        }
-        
-        if (empty($district)) {
-            $this->errors[] = "Please select a district.";
-        }
-        
-        return empty($this->errors);
-    }
-    
-    public function displayErrors() {
-        if (!empty($this->errors)) {
-            foreach ($this->errors as $error) {
-                echo '<script>alert("' . $error . '");</script>';
-            }
-        }
-    }
-    
-    public function getUserData() {
-        return $this->user_data;
-    }
-    
-    public function getOrderData() {
-        return $this->order_data;
-    }
-    
-    public function getPrefilledValue($field) {
-        if (!empty($this->order_data)) {
-            return $this->order_data[$field] ?? '';
-        } else {
-            return $this->user_data[$field] ?? '';
-        }
-    }
-    
-    public function getProducts() {
-        return $this->order_data['products'] ?? '';
-    }
-    
-    public function getTotalPrice() {
-        return $this->order_data['total_price'] ?? 0;
     }
 }
 
-// Initialize and process checkout
-$checkout = new CheckoutProcessor($conn);
-$checkout->loadUserData();
-$checkout->loadOrderData();
-$checkout->processOrder();
-$checkout->displayErrors();
+// Check if the order data is provided (reordering case)
+if (isset($_GET['order_id']) && isset($_GET['products']) && isset($_GET['total_price'])) {
+    $order_id = $_GET['order_id'];
+    $products = $_GET['products'];
+    $total_price = $_GET['total_price'];
+    $user_name = $_GET['name'];    // Pre-fill name from the order
+    $user_email = $_GET['email'];  // Pre-fill email from the order
+    $user_address = $_GET['address'];  // Pre-fill address from the order
+    $user_phone = $_GET['phone'];
+    
+    // Split address into city and district
+    $address_parts = explode(', ', $user_address);
+    $user_city = trim($address_parts[0]);
+    $user_district = trim($address_parts[1] ?? '');
+} else {
+    // Fetch user details for pre-filling the form
+    $user_details_query = mysqli_query($conn, "SELECT * FROM `user_details` WHERE id = '$user_id'") or die('query failed');
+    if (mysqli_num_rows($user_details_query) > 0) {
+        $user_details = mysqli_fetch_assoc($user_details_query);
+        $user_name = $user_details['name'];
+        $user_email = $user_details['email'];
+        $user_address = $user_details['address'];
+        $user_phone = $user_details['number'];
+        
+        // Split address into city and district
+        $address_parts = explode(', ', $user_address);
+        $user_city = trim($address_parts[0]);
+        $user_district = trim($address_parts[1] ?? '');
+    } else {
+        $user_name = '';
+        $user_email = '';
+        $user_address = '';
+        $user_phone = '';
+        $user_city = '';
+        $user_district = '';
+    }
+    $products = ''; // If no reorder, leave products empty
+    $total_price = 0;
+}
 
-// Get data for the view
-$user_name = $checkout->getPrefilledValue('name');
-$user_email = $checkout->getPrefilledValue('email');
-$user_phone = $checkout->getPrefilledValue('number');
-$user_city = $checkout->getPrefilledValue('city');
-$user_district = $checkout->getPrefilledValue('district');
-$products = $checkout->getProducts();
-$total_price = $checkout->getTotalPrice();
+if (isset($_POST['order_btn'])) {
+    $name = mysqli_real_escape_string($conn, $_POST['name']);
+    $email = mysqli_real_escape_string($conn, $_POST['email']);
+    $city = mysqli_real_escape_string($conn, $_POST['city']);
+    $district = mysqli_real_escape_string($conn, $_POST['district']);
+    $phone = mysqli_real_escape_string($conn, $_POST['phone']);
+    $payment_method = mysqli_real_escape_string($conn, $_POST['method']);
+    $selected_items = mysqli_real_escape_string($conn, $_POST['selected_items']);
+    $total_price = mysqli_real_escape_string($conn, $_POST['total_price']);
+    
+    // Concatenate city and district to form the address
+    $address = $city . ', ' . $district;
+    
+    // Insert the order into the orders table
+    $place_order = mysqli_query($conn, "INSERT INTO `orders`(user_id, placed_on, name, number, email, address, method, total_products, total_price, payment_status) VALUES('$user_id', NOW(), '$name', '$phone', '$email', '$address', '$payment_method', '$selected_items', '$total_price', 'Pending')") or die('query failed');
+    
+    if ($place_order) {
+        $order_id = mysqli_insert_id($conn); // Get the inserted order ID
+        
+        if ($payment_method == "esewa") {
+            // For reorders, we don't have actual cart items to clear, so we'll handle it differently
+            // Store minimal order info in session - index.php will handle stock updates based on order data
+            $_SESSION['pending_order'] = [
+                'order_id' => $order_id,
+                'selected_items' => [], // Empty array since we don't have cart items for reorders
+                'user_id' => $user_id,
+                'is_reorder' => true, // Flag to indicate this is a reorder
+                'products_data' => $selected_items // Store the product string for reference
+            ];
+            header('location:esewa.php?amount=' . $total_price);
+            exit();
+        } else {
+            // For cash on delivery with reorders, we need to update stock but can't clear cart (no cart items)
+            // Parse the products string to get product names and quantities for stock update
+            updateStockFromProductsString($selected_items, $conn); // FIXED: Removed $this->
+            
+            // Update payment status to completed for cash on delivery
+            mysqli_query($conn, "UPDATE `orders` SET payment_status = 'Completed' WHERE id = '$order_id'");
+            
+            // Redirect or show success message
+            echo '<script>alert("Your order has been placed successfully!");</script>';
+            header('location:orders.php'); // Redirect to orders page after placing the order
+            exit();
+        }
+    } else {
+        echo '<script>alert("Failed to place the order.");</script>';
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -178,65 +124,6 @@ $total_price = $checkout->getTotalPrice();
    <title>Review Checkout</title>
    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
    <link rel="stylesheet" href="css/style.css">
-   <style>
-       .order-summary {
-           background-color: #f9f9f9;
-           padding: 20px;
-           border-radius: 5px;
-           margin: 20px 0;
-           text-align: center;
-       }
-       
-       .order-summary p {
-           margin: 10px 0;
-           font-size: 18px;
-       }
-       
-       .checkout {
-           padding: 20px;
-       }
-       
-       .checkout .flex {
-           display: flex;
-           flex-wrap: wrap;
-           gap: 20px;
-       }
-       
-       .checkout .inputBox {
-           flex: 1 1 300px;
-       }
-       
-       .checkout .inputBox span {
-           display: block;
-           margin-bottom: 5px;
-           font-weight: bold;
-       }
-       
-       .checkout .inputBox input,
-       .checkout .inputBox select {
-           width: 100%;
-           padding: 10px;
-           border: 1px solid #ddd;
-           border-radius: 5px;
-       }
-       
-       .btn {
-           display: block;
-           width: 100%;
-           padding: 12px;
-           background-color: #4CAF50;
-           color: white;
-           border: none;
-           border-radius: 5px;
-           cursor: pointer;
-           font-size: 18px;
-           margin-top: 20px;
-       }
-       
-       .btn:hover {
-           background-color: #45a049;
-       }
-   </style>
 </head>
 <body>
 
@@ -333,27 +220,25 @@ $total_price = $checkout->getTotalPrice();
            if (selectedDistrict) {
                // Populate cities based on selected district
                cities[selectedDistrict].forEach(city => {
-                   const option = document.createElement("option");
-                   option.value = city;
-                   option.textContent = city;
-                   citySelect.appendChild(option);
+                   const option = new Option(city, city);
+                   citySelect.add(option);
                });
 
                // Select the user's city
                const userCity = "<?php echo htmlspecialchars($user_city); ?>";
                if (userCity) {
-                   const userCityOption = Array.from(citySelect.options).find(option => option.value === userCity);
-                   if (userCityOption) {
-                       userCityOption.selected = true;
-                   }
+                   citySelect.value = userCity;
                }
            }
        }
 
        // Call updateCities on page load to pre-select city
        window.onload = function() {
-           document.getElementById('district').value = "<?php echo htmlspecialchars($user_district); ?>"; // Set selected district
-           updateCities(); // Call function to populate cities and set selected city
+           const userDistrict = "<?php echo htmlspecialchars($user_district); ?>";
+           if (userDistrict) {
+               document.getElementById('district').value = userDistrict;
+               updateCities();
+           }
        };
 
        function validateForm() {

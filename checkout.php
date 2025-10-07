@@ -1,27 +1,33 @@
 <?php
 include 'config.php';
 session_start();
+error_reporting(0);
 
-class CheckoutManager {
+class CheckoutManager
+{
     private $conn;
     private $user_id;
     private $messages = [];
-    
-    public function __construct($connection) {
+
+    public function __construct($connection)
+    {
         $this->conn = $connection;
         $this->user_id = $_SESSION['id'] ?? null;
     }
-    
-    public function isUserLoggedIn() {
+
+    public function isUserLoggedIn()
+    {
         return isset($this->user_id);
     }
-    
-    public function redirectToLogin() {
+
+    public function redirectToLogin()
+    {
         header('location:login.php');
         exit();
     }
-    
-    public function processOrder($postData) {
+
+    public function processOrder($postData)
+    {
         $name = mysqli_real_escape_string($this->conn, $postData['name']);
         $number = $postData['number'];
         $email = mysqli_real_escape_string($this->conn, $postData['email']);
@@ -31,16 +37,10 @@ class CheckoutManager {
         $payment_status = "Pending";
         $grand_total = $postData['grand_total'];
         $selected_items = explode(',', $postData['selected_items']);
-        
-        // Redirect to eSewa if selected
-        if ($method == "esewa") {
-            header('location:esewa.php?amount=' . $grand_total);
-            exit();
-        }
-        
+
         $cart_total = 0;
         $cart_products = [];
-        
+
         if (count($selected_items) > 0) {
             foreach ($selected_items as $item_id) {
                 $cart_item = $this->getCartItem($item_id);
@@ -51,39 +51,91 @@ class CheckoutManager {
                 }
             }
         }
-        
+
         $total_products = implode(', ', $cart_products);
-        
+
         if ($cart_total == 0) {
             $this->messages[] = 'No items selected for the order!';
             return false;
         }
-        
+
         // Check if order already exists
         if ($this->orderExists($name, $number, $email, $method, $address, $total_products, $cart_total)) {
             $this->messages[] = 'Order already placed!';
             return false;
         }
-        
-        // Insert the order
-        if ($this->insertOrder($name, $number, $email, $method, $address, $total_products, $cart_total, $placed_on, $payment_status)) {
-            // Update stock and remove items from cart
-            foreach ($selected_items as $item_id) {
-                $cart_item = $this->getCartItem($item_id);
-                if ($cart_item) {
-                    $this->updateProductStock($cart_item['name'], $cart_item['quantity']);
-                    $this->removeFromCart($item_id);
+
+        // Insert the order first (for both payment methods)
+        $order_id = $this->insertOrder($name, $number, $email, $method, $address, $total_products, $cart_total, $placed_on, $payment_status);
+
+        if ($order_id) {
+            if ($method == "esewa") {
+                // Store order info in session for verification after eSewa payment
+                $_SESSION['pending_order'] = [
+                    'order_id' => $order_id,
+                    'selected_items' => $selected_items,
+                    'user_id' => $this->user_id
+                ];
+                header('location:esewa.php?amount=' . $grand_total);
+                exit();
+            } else {
+                // For cash on delivery, complete the order immediately
+                foreach ($selected_items as $item_id) {
+                    $cart_item = $this->getCartItem($item_id);
+                    if ($cart_item) {
+                        $this->updateProductStock($cart_item['name'], $cart_item['quantity']);
+                        $this->removeFromCart($item_id);
+                    }
                 }
+                // Update payment status to completed for cash on delivery
+                $this->updateOrderStatus($order_id, 'Completed');
+                $this->messages[] = 'Order placed successfully!';
+                return true;
             }
-            
-            $this->messages[] = 'Order placed successfully!';
-            return true;
         }
-        
+
         return false;
     }
-    
-    private function getCartItem($item_id) {
+
+    private function insertOrder($name, $number, $email, $method, $address, $total_products, $total_price, $placed_on, $payment_status)
+    {
+        $query = "INSERT INTO `orders`(user_id, name, number, email, method, address, total_products, total_price, placed_on, payment_status) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bind_param("issssssdss", $this->user_id, $name, $number, $email, $method, $address, $total_products, $total_price, $placed_on, $payment_status);
+
+        if ($stmt->execute()) {
+            return $stmt->insert_id; // Return the order ID
+        }
+        return false;
+    }
+
+    private function updateOrderStatus($order_id, $status)
+    {
+        $query = "UPDATE `orders` SET payment_status = ? WHERE id = ?";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bind_param("si", $status, $order_id);
+        return $stmt->execute();
+    }
+
+    public function completePendingOrder($order_id, $selected_items)
+    {
+        // Update order status to completed
+        $this->updateOrderStatus($order_id, 'Completed');
+
+        // Update stock and remove from cart
+        foreach ($selected_items as $item_id) {
+            $cart_item = $this->getCartItem($item_id);
+            if ($cart_item) {
+                $this->updateProductStock($cart_item['name'], $cart_item['quantity']);
+                $this->removeFromCart($item_id);
+            }
+        }
+
+        return true;
+    }
+
+    private function getCartItem($item_id)
+    {
         $query = "SELECT * FROM `cart` WHERE user_id = ? AND id = ?";
         $stmt = $this->conn->prepare($query);
         $stmt->bind_param("ii", $this->user_id, $item_id);
@@ -91,8 +143,9 @@ class CheckoutManager {
         $result = $stmt->get_result();
         return $result->fetch_assoc();
     }
-    
-    private function orderExists($name, $number, $email, $method, $address, $total_products, $total_price) {
+
+    private function orderExists($name, $number, $email, $method, $address, $total_products, $total_price)
+    {
         $query = "SELECT * FROM `orders` WHERE name = ? AND number = ? AND email = ? AND method = ? AND address = ? AND total_products = ? AND total_price = ?";
         $stmt = $this->conn->prepare($query);
         $stmt->bind_param("sissssd", $name, $number, $email, $method, $address, $total_products, $total_price);
@@ -100,42 +153,38 @@ class CheckoutManager {
         $result = $stmt->get_result();
         return $result->num_rows > 0;
     }
-    
-    private function insertOrder($name, $number, $email, $method, $address, $total_products, $total_price, $placed_on, $payment_status) {
-        $query = "INSERT INTO `orders`(user_id, name, number, email, method, address, total_products, total_price, placed_on, payment_status) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        $stmt = $this->conn->prepare($query);
-        $stmt->bind_param("issssssdss", $this->user_id, $name, $number, $email, $method, $address, $total_products, $total_price, $placed_on, $payment_status);
-        return $stmt->execute();
-    }
-    
-    private function updateProductStock($product_name, $quantity) {
+
+    private function updateProductStock($product_name, $quantity)
+    {
         $query = "UPDATE `products` SET stocks = stocks - ? WHERE name = ?";
         $stmt = $this->conn->prepare($query);
         $stmt->bind_param("is", $quantity, $product_name);
         return $stmt->execute();
     }
-    
-    private function removeFromCart($item_id) {
+
+    private function removeFromCart($item_id)
+    {
         $query = "DELETE FROM `cart` WHERE user_id = ? AND id = ?";
         $stmt = $this->conn->prepare($query);
         $stmt->bind_param("ii", $this->user_id, $item_id);
         return $stmt->execute();
     }
-    
-    public function getCartItems() {
+
+    public function getCartItems()
+    {
         $cart_items = [];
         $grand_total = 0;
-        
+
         if (!$this->user_id) {
             return ['items' => $cart_items, 'grand_total' => $grand_total];
         }
-        
+
         $query = "SELECT *, (price * quantity) as total_price FROM `cart` WHERE user_id = ?";
         $stmt = $this->conn->prepare($query);
         $stmt->bind_param("i", $this->user_id);
         $stmt->execute();
         $result = $stmt->get_result();
-        
+
         while ($item = $result->fetch_assoc()) {
             $cart_items[] = [
                 'id' => $item['id'],
@@ -147,11 +196,12 @@ class CheckoutManager {
             ];
             $grand_total += $item['total_price'];
         }
-        
+
         return ['items' => $cart_items, 'grand_total' => $grand_total];
     }
-    
-    public function getMessages() {
+
+    public function getMessages()
+    {
         return $this->messages;
     }
 }
@@ -258,19 +308,19 @@ $messages = $checkoutManager->getMessages();
             flex-direction: column;
             align-items: center;
         }
-        
+
         .message {
             text-align: center;
             padding: 10px;
             margin: 10px 0;
             border-radius: 5px;
         }
-        
+
         .message p {
             color: #2ecc71;
             font-weight: bold;
         }
-        
+
         .message.error p {
             color: #e74c3c;
         }
@@ -302,7 +352,8 @@ $messages = $checkoutManager->getMessages();
                 <?php foreach ($cart_items as $item): ?>
                     <div class="cart-item">
                         <label>
-                            <input type="checkbox" name="cart_items[]" value="<?php echo $item['id']; ?>" checked onclick="updateTotal()">
+                            <input type="checkbox" name="cart_items[]" value="<?php echo $item['id']; ?>" checked
+                                onclick="updateTotal()">
                             <?php echo $item['name']; ?>
                             <span>(<?php echo 'Rs.' . $item['price'] . '/-' . ' x ' . $item['quantity']; ?>)</span>
                         </label>
@@ -376,7 +427,7 @@ $messages = $checkoutManager->getMessages();
                 const checkboxes = document.querySelectorAll('input[name="cart_items[]"]');
                 let grandTotal = 0;
 
-                checkboxes.forEach(function(checkbox, index) {
+                checkboxes.forEach(function (checkbox, index) {
                     if (checkbox.checked) {
                         const price = document.querySelectorAll('.item-price')[index].value;
                         grandTotal += parseFloat(price);

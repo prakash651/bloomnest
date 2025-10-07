@@ -1,6 +1,7 @@
 <?php
 include 'config.php';
 session_start();
+error_reporting(0);
 
 class Product {
     public $id;
@@ -507,7 +508,7 @@ extract($result);
               <span class="match-score"><?php echo round($product->match_score); ?>% match</span>
           <?php endif; ?>
       </div>
-      <div class="price">$<?php echo number_format($product->price, 2); ?>/-</div>
+      <div class="price">Rs. <?php echo number_format($product->price, 2); ?>/-</div>
       <input type="number" class="qty" name="product_quantity" min="1" value="1">
       <input type="hidden" name="product_name" value="<?php echo htmlspecialchars($product->name); ?>">
       <input type="hidden" name="product_price" value="<?php echo htmlspecialchars($product->price); ?>">

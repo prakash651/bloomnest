@@ -1,7 +1,7 @@
 <?php
 session_start();
+error_reporting(0);
 include 'config.php';
-
 class ContactManager {
     private $conn;
     private $user_id;
